@@ -1,0 +1,198 @@
+---
+title: "Bayesian modeling and prediction for movies"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(BAS)
+library(gridExtra)
+```
+
+### Load data
+
+Make sure your data and R Markdown files are in the same directory. When loaded
+your data file will be called `movies`. Delete this note when before you submit 
+your work. 
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+
+* * *
+
+## Part 1: Data
+
+It is mentioned in the documentation that random sampling was used. Hence, the conclusions from this study are generalizable to all movies. Random assignment was not used. This is not a controlled experiment setup. Hence, causality can't be inferred.
+
+* * *
+
+## Part 2: Data manipulation
+
+```{r}
+movies <- movies %>% mutate(feature_film = ifelse(title_type == "Feature Film","yes","no"),
+                  drama = ifelse(genre == "Drama","yes","no"),
+                  mpaa_rating_R = ifelse(mpaa_rating == "R","yes","no"),
+                  oscar_season = ifelse(thtr_rel_month %in% c(10,11,12),"yes","no"),
+                  summer_season = ifelse(thtr_rel_month %in% c(5,6,7,8),"yes","no")) 
+
+movies$feature_film <- as.factor(movies$feature_film)
+movies$drama <- as.factor(movies$drama)
+movies$mpaa_rating_R <- as.factor(movies$mpaa_rating_R)
+movies$oscar_season <- as.factor(movies$oscar_season)
+movies$summer_season <- as.factor(movies$summer_season)
+```
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+```{r}
+p1 <- ggplot(movies, aes(x = feature_film, y = audience_score)) +
+         # geom_bar(stat = "identity", position = "dodge") +
+         geom_bar(stat = "summary", fun.y = "mean") +
+         scale_fill_brewer(palette = "Set1") +
+  labs(x = "Is it a feature film?", y = "Mean Audience \nScore")
+
+p2 <- ggplot(movies, aes(x = drama, y = audience_score)) +
+         # geom_bar(stat = "identity", position = "dodge") +
+         geom_bar(stat = "summary", fun.y = "mean") +
+         scale_fill_brewer(palette = "Set1") +
+  labs(x = "Is it a drama?", y = "Mean Audience \nScore")
+
+p3 <- ggplot(movies, aes(x = mpaa_rating_R, y = audience_score)) +
+         # geom_bar(stat = "identity", position = "dodge") +
+         geom_bar(stat = "summary", fun.y = "mean") +
+         scale_fill_brewer(palette = "Set1") +
+  labs(x = "Is it an R-rated movie?", y = "Mean Audience \nScore")
+
+p4 <- ggplot(movies, aes(x = oscar_season, y = audience_score)) +
+         # geom_bar(stat = "identity", position = "dodge") +
+         geom_bar(stat = "summary", fun.y = "mean") +
+         scale_fill_brewer(palette = "Set1") +
+  labs(x = "Did the movie release in Oscar season?", y = "Mean Audience \nScore")
+
+p5 <- ggplot(movies, aes(x = summer_season, y = audience_score)) +
+         # geom_bar(stat = "identity", position = "dodge") +
+         geom_bar(stat = "summary", fun.y = "mean") +
+         scale_fill_brewer(palette = "Set1") +
+  labs(x = "Did the movie release in summer season?", y = "Mean Audience \nScore")
+
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2, top = "Average Audience Score segmented by various features")
+
+```
+
+The following can be inferred from the plots. Mean audience score is:
+1. lower for feature films
+2. higer for dramas
+3. slightly lower for R-rated movies
+4. slightly higher if the movie released in Oscar season
+5. slightly lower if the movie release in the summer
+
+```{r}
+movies %>% 
+  group_by(feature_film) %>%
+  summarize(avg_audience_score_is_feature_film = mean(audience_score,na.rm=TRUE))
+
+movies %>% 
+  group_by(drama) %>%
+  summarize(avg_audience_score_is_drama = mean(audience_score,na.rm=TRUE))
+
+movies %>% 
+  group_by(mpaa_rating_R) %>%
+  summarize(avg_audience_score_is_mpaa_rating_R = mean(audience_score,na.rm=TRUE))
+
+movies %>% 
+  group_by(oscar_season) %>%
+  summarize(avg_audience_score_oscar_season = mean(audience_score,na.rm=TRUE))
+
+movies %>% 
+  group_by(summer_season) %>%
+  summarize(avg_audience_score_summer_season = mean(audience_score,na.rm=TRUE))
+
+```
+
+The conclusions drawn from the plots have been verified using the corresponding summary statistics
+
+* * *
+
+## Part 4: Modeling
+
+```{r}
+movies_na = na.omit(movies)
+
+bma_aud_score_bic = bas.lm(audience_score~top200_box+best_dir_win+best_actress_win+
+                          best_actor_win+best_pic_win+best_pic_nom+critics_score+
+                          imdb_num_votes+imdb_rating+summer_season+oscar_season+
+                          thtr_rel_year+mpaa_rating_R+runtime+drama+feature_film,
+                          data = movies_na,
+                          prior = "BIC", 
+                          modelprior = beta.binomial(),
+                          method = "MCMC")
+diagnostics(bma_aud_score_bic)
+```
+* * *
+
+The above plot shows that the posterior inclusion probabilities from renomralized marginal likelihoods of MCMC are in close agreement with the relative Monte Carlo frequencies of sample models.
+Our model has passed the diagnostic test.
+
+```{r}
+summary(bma_aud_score_bic)
+```
+
+The top 5 models out of the 2^16 models are shown above. The best model is the one with the highest posterior probability of 0.4228. It includes the intercept, the critics_score and the imdb_rating. The one with highest BF also contains runtime along with the variables of the best model. It's posterior probability is lower though - 0.1040. The top 3 models contribute more than 71% of the posterior probability. The balance 29% is distributed in the remaining models.
+
+## Part 5: Prediction
+
+```{r}
+movies_test <- data.frame(drama="yes",runtime=128,mpaa_rating_R="no",
+                          thtr_rel_year=2016,oscar_season="yes",
+                          summer_season="no",imdb_rating=8.6,
+                          imdb_num_votes=120745,critics_score=93,
+                          best_pic_nom="yes",best_pic_win="no",best_actor_win="no",
+                          best_actress_win="no",best_dir_win="no",top200_box="yes",
+                          feature_film="yes",audience_score=87)
+
+movies_test$drama <- factor(movies_test$drama,levels=c("no","yes"))
+movies_test$summer_season <- factor(movies_test$summer_season,levels=c("no","yes"))
+movies_test$oscar_season  <- factor(movies_test$oscar_season,levels=c("no","yes"))
+movies_test$mpaa_rating_R <- factor(movies_test$mpaa_rating_R,levels=c("no","yes"))
+movies_test$feature_film <- factor(movies_test$feature_film,levels=c("no","yes"))
+movies_test$best_pic_nom <-  factor(movies_test$best_pic_nom,levels=c("no","yes"))
+movies_test$best_pic_win <-  factor(movies_test$best_pic_win,levels=c("no","yes"))
+movies_test$best_actor_win <-  factor(movies_test$best_actor_win,levels=c("no","yes"))
+movies_test$best_actress_win <-  factor(movies_test$best_actress_win,levels=c("no","yes"))
+movies_test$best_dir_win <-  factor(movies_test$best_dir_win,levels=c("no","yes"))
+movies_test$top200_box <-  factor(movies_test$top200_box,levels=c("no","yes"))
+
+# Predict the audience score
+movies_test_pred <- predict(bma_aud_score_bic,newdata = movies_test,estimator = "BPM")
+
+# Predicted audience score
+movies_test_pred$Ybma
+```
+
+The predicted audience score is 95.99 which is close to the actual audience score of 87.
+
+The data for the movie was obtained from IMDB and Rotten Tomatoes as follows:
+
+1. https://www.rottentomatoes.com/m/la_la_land/
+2. http://www.imdb.com/title/tt3783958/awards?ref_=tt_awd
+
+* * *
+
+## Part 6: Conclusion
+
+From the data and the model, the answer to the research question 'What attributes make a movie popular?' are the critics score and IMBDB rating. They are most important in predicting the audience score. We also saw that movies released in Oscar season and drama movies have higher audience score. A causal relationship can't be established as a random assignment hasn't been used.
